@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>S-System — Intelligent Exam Ranker</title>
+<style>
+:root{
+  --bg:#0b1020; --card:#0f1724; --accent:#ff6fb5; --accent2:#6bf0ff; --glass: rgba(255,255,255,0.04);
+  --glass-2: rgba(255,255,255,0.03);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+}
+html,body{height:100%;margin:0;background:linear-gradient(180deg,#05060a 0%, #071028 60%);color:#e6eef8}
+.wrap{max-width:1100px;margin:24px auto;padding:20px}
+header{display:flex;align-items:center;gap:12px}
+.logo{width:64px;height:64px;border-radius:12px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-weight:800;color:#071028;font-size:28px;box-shadow:0 6px 30px rgba(107,111,255,0.08)}
+h1{margin:0 0 4px;font-size:22px}
+.grid{display:grid;grid-template-columns:1fr 420px;gap:18px;margin-top:18px}
+.card{background:linear-gradient(180deg, var(--glass), var(--glass-2));border-radius:14px;padding:14px;box-shadow:0 8px 30px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.03)}
+label{display:block;font-size:13px;color:#cfe8ff;margin-top:10px}
+input[type=text], input[type=number], select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+input[type=file]{margin-top:6px}
+button{background:linear-gradient(90deg,var(--accent),var(--accent2));border:none;color:#071028;padding:10px 12px;border-radius:10px;font-weight:700;cursor:pointer;margin-top:12px}
+.student-list{margin-top:12px;display:flex;flex-direction:column;gap:8px}
+.student-item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02)}
+.small{font-size:12px;color:#a8c8ff}
+canvas{background:transparent}
+.anime-badge{display:inline-block;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.04);font-weight:700;color:var(--accent)}
+@media(max-width:980px){.grid{grid-template-columns:1fr;}.logo{width:56px;height:56px}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.7.107/pdf.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="logo">SS</div>
+  <div>
+    <h1>S-System — AI Exam Ranker</h1>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="card">
+    <h3>Student Entry</h3>
+    <label>Student Name</label>
+    <input type="text" id="sname" placeholder="e.g. Aryan" />
+    <label>School Name</label>
+    <input type="text" id="school" placeholder="e.g. ABC Higher Secondary" />
+    <label>Subject</label>
+    <select id="subject">
+      <option value="Physics">Physics</option>
+      <option value="Chemistry">Chemistry</option>
+      <option value="Maths">Maths</option>
+    </select>
+    <label>Marks Obtained</label>
+    <input type="number" id="marks" min="0" />
+    <label>Total Marks</label>
+    <input type="number" id="total" min="1" />
+    <label>Upload Question Paper (PDF)</label>
+    <input type="file" id="pdfupload" accept="application/pdf" />
+    <button id="addStudent">Add Student</button>
+    <div class="student-list" id="studentList"></div>
+  </section>
+
+  <aside class="card">
+    <h3>Leaderboard & Charts</h3>
+    <div id="leaderboard">No students yet.</div>
+    <canvas id="chart" width="380" height="260"></canvas>
+    <button id="compareBtn">AI Compare & Rank</button>
+    <div id="debug" style="margin-top:10px;font-size:13px;color:#bcd6f7"></div>
+  </aside>
+</main>
+</div>
+
+<script>
+// === CONFIGURE JSONBin ===
+const API_URL = 'https://api.jsonbin.io/v3/b/YOUR_BIN_ID';
+const API_KEY = 'YOUR_API_KEY'; // Keep this secret!
+const MOBILE_API = 'https://api.jsonbin.io/v3/b/YOUR_BIN_ID/latest'; // for mobile app GET
+
+// Japanese word fun
+const jpWords=[{w:'ganbatte',m:'(がんばって) — do your best'},{w:'yūki',m:'(勇気) — courage'},{w:'arigatō',m:'(ありがとう) — thank you'},{w:'kawaii',m:'(かわいい) — cute'},{w:'senpai',m:'(先輩) — senior'}];
+const pick=jpWords[Math.floor(Math.random()*jpWords.length)];
+document.getElementById('debug').innerText=`Japanese: ${pick.w} — ${pick.m}`;
+
+// --- PDF & AI Difficulty ---
+function uid(){return Math.random().toString(36).slice(2,9)}
+async function extractTextFromPDF(file){
+  const arrayBuffer=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  let fullText='';
+  for(let i=1;i<=pdf.numPages;i++){
+    const page=await pdf.getPage(i);
+    const content=await page.getTextContent();
+    fullText+=content.items.map(i=>i.str).join(' ')+'\n';
+  }
+  return fullText;
+}
+
+function analyzeDifficulty(text){
+  if(!text) return 0;
+  const words=text.replace(/\s+/g,' ').split(/\s+/);
+  const avgWordLen=words.reduce((s,w)=>s+w.length,0)/Math.max(1,words.length);
+  const hardVerbs=['prove','derive','show','evaluate','compare','justify','critically','discuss','analyse','design','formulate','construct'];
+  const midVerbs=['calculate','find','determine','compute','state','explain','solve','estimate'];
+  let hardCount=0,midCount=0;
+  const lc=text.toLowerCase();
+  for(const v of hardVerbs) if(lc.includes(v)) hardCount++;
+  for(const v of midVerbs) if(lc.includes(v)) midCount++;
+  const mathHints=['integrate','differentiate','derivative','integral','limit','matrix','vector','derive'];
+  let mathCount=0; for(const m of mathHints) if(lc.includes(m)) mathCount++;
+  const numericDensity=(text.match(/[0-9]/g)||[]).length/Math.max(1,words.length);
+  let score=0; score+=Math.min(0.5,(avgWordLen-4)/6);
+  score+=Math.min(0.3,hardCount*0.05+midCount*0.02);
+  score+=Math.min(0.3,mathCount*0.06+numericDensity*0.4);
+  return Math.max(0,Math.min(1,score));
+}
+
+// --- JSONBin Operations ---
+async function fetchStudents(){
+  const res = await fetch(MOBILE_API,{headers:{'X-Master-Key':API_KEY}});
+  const data = await res.json();
+  return data.record || [];
+}
+
+async function updateStudents(arr){
+  await fetch(API_URL,{
+    method:'PUT',
+    headers:{'Content-Type':'application/json','X-Master-Key':API_KEY,'X-Bin-Versioning':'false'},
+    body: JSON.stringify(arr)
+  });
+}
+
+// --- UI ---
+function refreshStudentList(students){
+  const el=document.getElementById('studentList'); el.innerHTML='';
+  for(const s of students){
+    const div=document.createElement('div'); div.className='student-item';
+    div.innerHTML=`<div><strong>${s.name}</strong> <div class='small'>${s.subject} • ${s.school}</div></div>
+      <div class='small'>${s.marks}/${s.total} (${s.pct.toFixed(2)}%) • Screen:${s.screenTime}m</div>`;
+    el.appendChild(div);
+  }
+}
+
+// --- Add Student ---
+document.getElementById('addStudent').addEventListener('click',async()=>{
+  const name=document.getElementById('sname').value.trim();
+  const school=document.getElementById('school').value.trim();
+  const subject=document.getElementById('subject').value;
+  const marks=Number(document.getElementById('marks').value);
+  const total=Number(document.getElementById('total').value);
+  const file=document.getElementById('pdfupload').files[0];
+  if(!name||!school||(!marks && marks!==0)||!total||!file){alert('Fill all fields & upload PDF'); return;}
+  const text = await extractTextFromPDF(file);
+  const diff = analyzeDifficulty(text);
+  const pct = (marks/total)*100;
+  const adjusted = Math.min(100,pct + diff*15);
+  const screenTime = Math.floor(adjusted*2);
+
+  let students = await fetchStudents();
+  students.push({id:uid(),name,school,subject,marks,total,pct,difficulty:diff,adjusted,screenTime});
+  await updateStudents(students);
+  refreshStudentList(students);
+  document.getElementById('debug').innerText=`Added ${name} — diff:${(diff*100).toFixed(1)}%, screenTime:${screenTime} mins`;
+});
+
+// --- Leaderboard & Chart ---
+let chart=null;
+document.getElementById('compareBtn').addEventListener('click',async()=>{
+  let students = await fetchStudents();
+  const byName={};
+  for(const s of students){
+    if(!byName[s.name]) byName[s.name]={name:s.name,school:s.school,subjects:{},raw:[],difficulty:[]};
+    byName[s.name].subjects[s.subject]={pct:s.pct,difficulty:s.difficulty};
+    byName[s.name].raw.push(s.pct); byName[s.name].difficulty.push(s.difficulty);
+  }
+  const arr=Object.values(byName).map(st=>{
+    const avgPct=st.raw.reduce((a,b)=>a+b,0)/st.raw.length;
+    const avgDiff=st.difficulty.reduce((a,b)=>a+b,0)/st.difficulty.length;
+    let adjusted=Math.min(100,avgPct+avgDiff*15);
+    const screenTime = Math.floor(adjusted*2);
+    return {...st,avgPct,avgDiff,adjusted,screenTime};
+  });
+  arr.sort((a,b)=>b.adjusted-a.adjusted);
+  const el=document.getElementById('leaderboard');
+  el.innerHTML='<ol>'+arr.map(a=>`<li><strong>${a.name}</strong> — adj:${a.adjusted.toFixed(2)}% <div class="small">${a.school} • ScreenTime:${a.screenTime} mins</div></li>`).join('')+'</ol>';
+
+  // Chart
+  const subjects=['Physics','Chemistry','Maths'];
+  const grouped={};
+  for(const s of students){
+    if(!grouped[s.name]) grouped[s.name]={name:s.name,vals:{Physics:0,Chemistry:0,Maths:0}};
+    grouped[s.name].vals[s.subject]=s.pct;
+  }
+  const datasets=[];
+  for(const n in grouped){
+    const g=grouped[n];
+    datasets.push({label:g.name,data:subjects.map(sub=>g.vals[sub]||0)});
+  }
+  const ctx=document.getElementById('chart').getContext('2d');
+  if(chart) chart.destroy();
+  chart = new Chart(ctx,{type:'bar',data:{labels:subjects,datasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
+  document.getElementById('debug').innerText='Leaderboard & chart updated — Mobile app can fetch data via API';
+});
+</script>
+</body>
+</html>
